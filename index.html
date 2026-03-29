@@ -1,0 +1,380 @@
+import React, { useState, useEffect } from 'react';
+import { BookOpen, GraduationCap, School, CheckCircle2, XCircle, ChevronRight, BarChart3, RotateCcw, Trophy, Dices, User } from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, addDoc, onSnapshot } from 'firebase/firestore';
+
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [currentStep, setCurrentStep] = useState(0); // 0: Intro, 1-4: Questions, 5: Result
+  const [score, setScore] = useState(0);
+  const [selectedOption, setSelectedOption] = useState(null);
+  const [showFeedback, setShowFeedback] = useState(false);
+  
+  // 新增：暱稱與排行榜狀態
+  const [nickname, setNickname] = useState('');
+  const [leaderboard, setLeaderboard] = useState([]);
+
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) {
+        console.error("Auth error:", error);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const leaderboardRef = collection(db, 'artifacts', appId, 'public', 'data', 'leaderboard');
+    const unsubscribe = onSnapshot(
+      leaderboardRef,
+      (snapshot) => {
+        const entries = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        // 記憶體內排序：分數高優先，分數相同則依時間排序 (越早完成越前面)
+        entries.sort((a, b) => {
+          if (b.score !== a.score) return b.score - a.score;
+          return (a.timestamp || 0) - (b.timestamp || 0);
+        });
+        // 只取前 10 名顯示，避免畫面過長
+        setLeaderboard(entries.slice(0, 10));
+      },
+      (error) => console.error("Snapshot error:", error)
+    );
+    return () => unsubscribe();
+  }, [user]);
+
+  const adjectives = ["迷惘的", "認真的", "熬夜的", "熱血的", "頭痛的", "充滿希望的", "卡關的", "神準的", "準時下班的"];
+  const nouns = ["菸酒生", "國小老師", "高中老師", "所長", "教授", "研究生", "教務主任", "代理教師", "同學"];
+
+  const handleGenerateNickname = () => {
+    const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+    const noun = nouns[Math.floor(Math.random() * nouns.length)];
+    setNickname(`${adj}${noun}`);
+  };
+
+  const questions = [
+    {
+      id: 1,
+      title: "情境一：建立假說",
+      context: "你注意到班上有些學生每天都有吃早餐，有些則沒有；同時你也觀察到第一節課總是有幾個人在打瞌睡。你想用卡方檢定來探討「吃早餐習慣（每天吃/偶爾吃/不吃）」與「第一節課是否打瞌睡（是/否）」的關聯。",
+      question: "進行獨立性卡方檢定時，我們的「虛無假說 (Null Hypothesis, H₀)」應該設定為什麼？",
+      options: [
+        "A. 吃早餐習慣與打瞌睡有顯著的因果關係。",
+        "B. 沒吃早餐的學生比較容易在第一節課打瞌睡。",
+        "C. 吃早餐習慣與第一節課是否打瞌睡是互相獨立的（兩者無關）。",
+        "D. 吃早餐習慣與第一節課是否打瞌睡有高度相關。"
+      ],
+      correctAnswer: 2,
+      explanation: "卡方獨立性檢定的虛無假說 (H₀) 永遠是假設兩個變數之間「沒有關聯」或「互相獨立」。我們透過檢定來看看是否有足夠的證據推翻這個假設。"
+    },
+    {
+      id: 2,
+      title: "情境二：計算期望值",
+      context: "為了研究導入「數位學習平台（如 Google Classroom）」是否會影響「作業準時繳交率」，你收集了兩個班級共 100 位學生的數據，列聯表如下：",
+      table: {
+        headers: ["", "準時交作業", "遲交作業", "總計"],
+        rows: [
+          ["使用數位平台", "40", "10", "50"],
+          ["未使用平台", "20", "30", "50"],
+          ["總計", "60", "40", "100"]
+        ]
+      },
+      question: "如果這兩個變數真的是「獨立（無關）」的，那麼「使用數位平台」且「準時交作業」的學生，其『期望值』應該是多少人？",
+      options: ["A. 20 人", "B. 30 人", "C. 40 人", "D. 50 人"],
+      correctAnswer: 1,
+      explanation: "期望值的計算公式是：(列總和 × 欄總和) ÷ 總樣本數。以此題為例，使用平台的總和是 50，準時交的總和是 60，總人數是 100。所以期望值 = (50 × 60) ÷ 100 = 30 人。"
+    },
+    {
+      id: 3,
+      title: "情境三：自由度 (Degrees of Freedom)",
+      context: "所上的同學正在進行一項研究，觀察學生的「座位區域（前排、中排、後排）」與他們「上課發問的頻率（高、中、低）」是否有關聯。這會形成一個 3x3 的列聯表。",
+      question: "請問這個卡方檢定的自由度 (df, Degrees of Freedom) 是多少？",
+      options: ["A. 2", "B. 4", "C. 6", "D. 9"],
+      correctAnswer: 1,
+      explanation: "列聯表卡方檢定的自由度公式為：(列數 - 1) × (欄數 - 1)。這裡座位區域有 3 類，發問頻率也有 3 類。因此 df = (3 - 1) × (3 - 1) = 2 × 2 = 4。"
+    },
+    {
+      id: 4,
+      title: "情境四：判讀結果",
+      context: "所長想了解不同任教階段（國小、國中、高中老師）對於「AI 融入教學研習」的參加意願（高、低）是否有差異。經過軟體跑完卡方檢定後，得到卡方值 χ² = 11.2，p 值 (p-value) = 0.004。",
+      question: "假設我們的顯著水準 (α) 設為 0.05，根據這個 p 值，你能得出什麼結論？",
+      options: [
+        "A. p < 0.05，拒絕虛無假說，代表任教階段與研習意願「有關聯」。",
+        "B. p < 0.05，接受虛無假說，代表任教階段與研習意願「無關」。",
+        "C. p 值太小，代表數據蒐集有誤，需要重新做問卷。",
+        "D. 國小老師對 AI 融入教學的意願最高。"
+    ],
+    correctAnswer: 0,
+    explanation: "當 p 值小於顯著水準 (0.05) 時，我們有足夠的證據拒絕虛無假說 (H₀: 兩者獨立)。這表示任教階段與研習意願之間存在顯著的關聯性。至於誰的意願最高，需要進一步看殘差分析，單看 p 值無法得知。"
+  }
+];
+
+  const handleOptionClick = (index) => {
+    if (showFeedback) return;
+    setSelectedOption(index);
+    setShowFeedback(true);
+    if (index === questions[currentStep - 1].correctAnswer) {
+      setScore(score + 1);
+    }
+  };
+
+  const handleNextStep = () => {
+    setShowFeedback(false);
+    setSelectedOption(null);
+    
+    // 如果是最後一題答完，將成績加入雲端排行榜
+    if (currentStep === questions.length) {
+      if (user) {
+        const leaderboardRef = collection(db, 'artifacts', appId, 'public', 'data', 'leaderboard');
+        addDoc(leaderboardRef, {
+          name: nickname,
+          score: score,
+          userId: user.uid,
+          timestamp: Date.now()
+        }).catch(e => console.error("Error adding score:", e));
+      }
+    }
+    
+    setCurrentStep(currentStep + 1);
+  };
+
+  const resetGame = () => {
+    setCurrentStep(0);
+    setScore(0);
+    setSelectedOption(null);
+    setShowFeedback(false);
+  };
+
+  const renderIntro = () => (
+    <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 max-w-2xl w-full mx-auto text-center space-y-6">
+      <div className="flex justify-center mb-4">
+        <School className="w-16 h-16 sm:w-20 sm:h-20 text-blue-600" />
+      </div>
+      <h1 className="text-2xl sm:text-3xl font-bold text-gray-800">校園觀察家：卡方檢定挑戰</h1>
+      <p className="text-base sm:text-lg text-gray-600 text-left">
+        各位數位學習所的老師、同學們好！在我們的教學日常與量化研究中，經常需要探討兩個類別變數是否相關（例如：用平板學習是否影響成績？吃早餐是否影響專注度？）。
+      </p>
+      
+      <div className="bg-blue-50 p-5 rounded-xl mt-6">
+        <label className="block text-gray-700 font-bold mb-3 text-lg">請輸入你的玩家暱稱：</label>
+        <div className="flex flex-col sm:flex-row gap-3 justify-center items-center">
+          <div className="relative w-full sm:w-64">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <User className="h-5 w-5 text-gray-400" />
+            </div>
+            <input
+              type="text"
+              value={nickname}
+              onChange={(e) => setNickname(e.target.value)}
+              placeholder="例如：熱血國小老師"
+              className="pl-10 w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+            />
+          </div>
+          <button
+            onClick={handleGenerateNickname}
+            className="w-full sm:w-auto flex items-center justify-center gap-2 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 font-semibold py-3 px-4 rounded-lg transition"
+          >
+            <Dices className="w-5 h-5" /> 隨機生成
+          </button>
+        </div>
+      </div>
+
+      <button
+        onClick={() => setCurrentStep(1)}
+        disabled={!nickname.trim()}
+        className={`mt-6 font-bold py-3 px-8 rounded-full shadow-lg transform transition flex items-center mx-auto ${
+          !nickname.trim() 
+            ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+            : 'bg-blue-600 hover:bg-blue-700 text-white hover:scale-105'
+        }`}
+      >
+        開始挑戰 <ChevronRight className="ml-2" />
+      </button>
+    </div>
+  );
+
+  const renderQuestion = () => {
+    const q = questions[currentStep - 1];
+    const isAnswered = showFeedback;
+
+    return (
+      <div className="bg-white rounded-2xl shadow-xl p-5 sm:p-8 max-w-3xl w-full mx-auto space-y-4 sm:space-y-6">
+        <div className="flex justify-between items-center text-xs sm:text-sm font-semibold text-gray-500 mb-2">
+          <span className="flex items-center"><BarChart3 className="w-4 h-4 mr-1" /> 題目 {currentStep} / {questions.length}</span>
+          <span>目前得分: {score}</span>
+        </div>
+        
+        <div className="w-full bg-gray-200 rounded-full h-2 sm:h-2.5 mb-4 sm:mb-6">
+          <div className="bg-blue-600 h-2 sm:h-2.5 rounded-full transition-all duration-500" style={{ width: `${(currentStep / questions.length) * 100}%` }}></div>
+        </div>
+
+        <h2 className="text-xl sm:text-2xl font-bold text-blue-800 border-b-2 border-blue-100 pb-2">{q.title}</h2>
+        
+        <div className="bg-blue-50 p-3 sm:p-4 rounded-lg text-gray-700 text-base sm:text-lg leading-relaxed">
+          {q.context}
+        </div>
+
+        {q.table && (
+          <div className="overflow-x-auto my-3 sm:my-4">
+            <table className="w-full text-center border-collapse border border-gray-300 min-w-[300px]">
+              <thead>
+                <tr className="bg-gray-100 text-sm sm:text-base">
+                  {q.table.headers.map((th, i) => (
+                    <th key={i} className="border border-gray-300 p-1 sm:p-2 font-semibold text-gray-700">{th}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="text-sm sm:text-base">
+                {q.table.rows.map((row, i) => (
+                  <tr key={i} className={i === q.table.rows.length - 1 ? "bg-gray-50 font-bold" : ""}>
+                    {row.map((cell, j) => (
+                      <td key={j} className={`border border-gray-300 p-1 sm:p-2 ${j===0 ? "bg-gray-100 font-semibold whitespace-nowrap" : ""}`}>{cell}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <p className="text-lg sm:text-xl font-bold text-gray-800 mt-2 sm:mt-4">{q.question}</p>
+
+        <div className="space-y-2 sm:space-y-3 mt-4 sm:mt-6">
+          {q.options.map((option, index) => {
+            let buttonClass = "w-full text-left p-3 sm:p-4 rounded-xl border-2 transition-all duration-200 text-base sm:text-lg ";
+            
+            if (!isAnswered) {
+              buttonClass += "border-gray-200 hover:border-blue-400 hover:bg-blue-50 cursor-pointer active:bg-blue-100";
+            } else {
+              if (index === q.correctAnswer) {
+                buttonClass += "border-green-500 bg-green-50 text-green-800 font-medium";
+              } else if (index === selectedOption) {
+                buttonClass += "border-red-400 bg-red-50 text-red-700";
+              } else {
+                buttonClass += "border-gray-200 opacity-50 cursor-not-allowed";
+              }
+            }
+
+            return (
+              <button
+                key={index}
+                onClick={() => handleOptionClick(index)}
+                disabled={isAnswered}
+                className={buttonClass}
+              >
+                <div className="flex items-center justify-between">
+                  <span>{option}</span>
+                  {isAnswered && index === q.correctAnswer && <CheckCircle2 className="text-green-500 w-5 h-5 sm:w-6 sm:h-6 flex-shrink-0 ml-2" />}
+                  {isAnswered && index === selectedOption && index !== q.correctAnswer && <XCircle className="text-red-500 w-5 h-5 sm:w-6 sm:h-6 flex-shrink-0 ml-2" />}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {showFeedback && (
+          <div className={`mt-4 sm:mt-6 p-4 sm:p-5 rounded-xl border-l-4 animate-fade-in-up ${selectedOption === q.correctAnswer ? 'bg-green-100 border-green-500' : 'bg-red-100 border-red-500'}`}>
+            <h3 className={`font-bold text-base sm:text-lg mb-2 ${selectedOption === q.correctAnswer ? 'text-green-800' : 'text-red-800'}`}>
+              {selectedOption === q.correctAnswer ? '🎉 答對了！' : '💡 差一點點！'}
+            </h3>
+            <p className="text-sm sm:text-base text-gray-700 leading-relaxed">{q.explanation}</p>
+            <button
+              onClick={handleNextStep}
+              className="mt-4 bg-gray-800 hover:bg-gray-900 text-white font-semibold py-2 px-6 rounded-lg transition shadow flex items-center ml-auto active:scale-95"
+            >
+              {currentStep === questions.length ? '看結果' : '下一題'} <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5 ml-1" />
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderResult = () => {
+    let message = "";
+    if (score === 4) message = "太強了！你就是傳說中的「卡方戰士」！你的觀念非常清晰，論文發表沒問題啦！🏆";
+    else if (score >= 2) message = "表現不錯喔！已經掌握了大部分的核心概念，再稍微複習一下就完美了！📚";
+    else message = "沒關係，統計學本來就需要多一點時間消化。這些都是很好的複習素材，再挑戰一次吧！💪";
+
+    return (
+      <div className="bg-white rounded-2xl shadow-xl p-5 sm:p-8 max-w-md sm:max-w-2xl w-full mx-auto text-center space-y-6">
+        <div className="flex justify-center mb-4">
+          {score === 4 ? <Trophy className="w-20 h-20 sm:w-24 sm:h-24 text-yellow-500" /> : <GraduationCap className="w-20 h-20 sm:w-24 sm:h-24 text-blue-600" />}
+        </div>
+        <h1 className="text-3xl sm:text-4xl font-extrabold text-gray-800">挑戰完成！</h1>
+        <div className="text-5xl sm:text-6xl font-black text-blue-600 my-4 sm:my-6">
+          {score} <span className="text-xl sm:text-2xl text-gray-500 font-medium">/ 4</span>
+        </div>
+        <p className="text-base sm:text-xl text-gray-700 bg-gray-50 p-4 rounded-lg">{message}</p>
+        
+        <div className="mt-6 sm:mt-8 bg-indigo-50 rounded-xl p-4 sm:p-6 text-left">
+          <h3 className="text-lg sm:text-xl font-bold text-indigo-900 mb-4 flex items-center justify-center sm:justify-start">
+            <BarChart3 className="mr-2" /> 研究所學習排行榜 (Top 10)
+          </h3>
+          <div className="space-y-2">
+            {leaderboard.length === 0 && <p className="text-center text-gray-500 py-4">目前還沒有人挑戰，搶下第一名吧！</p>}
+            {leaderboard.map((entry, idx) => {
+              const isMe = entry.userId === user?.uid;
+              return (
+                <div key={entry.id} className={`flex justify-between items-center p-3 rounded-lg ${isMe ? 'bg-blue-600 text-white shadow-md transform scale-105' : 'bg-white text-gray-700 border border-gray-200'}`}>
+                  <div className="flex items-center gap-2 sm:gap-3">
+                    <span className={`font-bold w-6 text-center ${idx === 0 ? 'text-yellow-400 text-xl' : idx === 1 ? 'text-gray-300' : idx === 2 ? 'text-amber-600' : ''}`}>
+                      {idx + 1}
+                    </span>
+                    <span className="font-semibold text-sm sm:text-base line-clamp-1">{entry.name} {isMe && '(你)'}</span>
+                  </div>
+                  <span className="font-bold text-sm sm:text-base whitespace-nowrap">{entry.score} 分</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="mt-8 pt-2">
+          <button
+            onClick={resetGame}
+            className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-full shadow-lg transform transition hover:scale-105 flex items-center mx-auto"
+          >
+            <RotateCcw className="mr-2" /> 再玩一次
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4 font-sans">
+      <style>{`
+        @keyframes fadeInUp {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in-up {
+          animation: fadeInUp 0.4s ease-out forwards;
+        }
+      `}</style>
+      
+      {currentStep === 0 && renderIntro()}
+      {currentStep > 0 && currentStep <= questions.length && renderQuestion()}
+      {currentStep > questions.length && renderResult()}
+    </div>
+  );
+}
