@@ -35,11 +35,31 @@
     import { getFirestore, collection, addDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
     // --- Firebase Initialization ---
-    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-    const app = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-    const db = getFirestore(app);
-    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    let auth = null;
+    let db = null;
+    let isFirebaseEnabled = false;
+    const appId = 'chi-square-game'; // 設定一個專屬 ID 作為資料庫儲存路徑的一部分
+
+    try {
+      // 替換成你的專屬 Firebase Config
+      const firebaseConfig = {
+        apiKey: "AIzaSyDBLFK7T2ewIk4qgvlBz9hfQuxEALLUezQ",
+        authDomain: "typing-game-755a8.firebaseapp.com",
+        databaseURL: "https://typing-game-755a8-default-rtdb.firebaseio.com",
+        projectId: "typing-game-755a8",
+        storageBucket: "typing-game-755a8.firebasestorage.app",
+        messagingSenderId: "938096537906",
+        appId: "1:938096537906:web:1b6196c3793cc827cb272b",
+        measurementId: "G-169FTTX4GT"
+      };
+      
+      const app = initializeApp(firebaseConfig);
+      auth = getAuth(app);
+      db = getFirestore(app);
+      isFirebaseEnabled = true;
+    } catch (error) {
+      console.error("Firebase 初始化失敗:", error);
+    }
 
     // --- Game State ---
     let user = null;
@@ -52,12 +72,11 @@
 
     // --- Auth & Firestore Listeners ---
     const initAuth = async () => {
+      if (!isFirebaseEnabled) return; // 單機模式下略過登入
       try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
+        // 因為已經換成您專屬的 Firebase 設定，環境預設的 Token 會不吻合
+        // 所以我們直接強制使用「匿名登入 (Anonymous Auth)」即可
+        await signInAnonymously(auth);
       } catch (error) {
         console.error("Auth error:", error);
       }
@@ -65,26 +84,28 @@
     initAuth();
 
     let unsubscribeLeaderboard = null;
-    onAuthStateChanged(auth, (currentUser) => {
-      user = currentUser;
-      if (user) {
-        const leaderboardRef = collection(db, 'artifacts', appId, 'public', 'data', 'leaderboard');
-        unsubscribeLeaderboard = onSnapshot(
-          leaderboardRef,
-          (snapshot) => {
-            const entries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            // Memory sort
-            entries.sort((a, b) => {
-              if (b.score !== a.score) return b.score - a.score;
-              return (a.timestamp || 0) - (b.timestamp || 0);
-            });
-            leaderboard = entries.slice(0, 10);
-            if (currentStep > questions.length) renderApp(); // Re-render if on result page
-          },
-          (error) => console.error("Snapshot error:", error)
-        );
-      }
-    });
+    if (isFirebaseEnabled) {
+      onAuthStateChanged(auth, (currentUser) => {
+        user = currentUser;
+        if (user) {
+          const leaderboardRef = collection(db, 'artifacts', appId, 'public', 'data', 'leaderboard');
+          unsubscribeLeaderboard = onSnapshot(
+            leaderboardRef,
+            (snapshot) => {
+              const entries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+              // Memory sort
+              entries.sort((a, b) => {
+                if (b.score !== a.score) return b.score - a.score;
+                return (a.timestamp || 0) - (b.timestamp || 0);
+              });
+              leaderboard = entries.slice(0, 10);
+              if (currentStep > questions.length) renderApp(); // Re-render if on result page
+            },
+            (error) => console.error("Snapshot error:", error)
+          );
+        }
+      });
+    }
 
     // --- Data ---
     const questions = [
@@ -213,7 +234,8 @@
       
       // 最後一題答完上傳成績
       if (currentStep === questions.length) {
-        if (user) {
+        if (isFirebaseEnabled && user) {
+          // 有連線時：上傳到雲端排行榜
           const leaderboardRef = collection(db, 'artifacts', appId, 'public', 'data', 'leaderboard');
           addDoc(leaderboardRef, {
             name: nickname,
@@ -221,6 +243,11 @@
             userId: user.uid,
             timestamp: Date.now()
           }).catch(e => console.error("Error adding score:", e));
+        } else if (!isFirebaseEnabled) {
+          // 單機模式時：將成績記錄在瀏覽器暫存中
+          leaderboard.push({ id: Date.now(), name: nickname, score: score, userId: 'local-user' });
+          leaderboard.sort((a, b) => b.score - a.score);
+          leaderboard = leaderboard.slice(0, 10);
         }
       }
       
@@ -414,7 +441,8 @@
       }
 
       let leaderboardHTML = leaderboard.map((entry, idx) => {
-        const isMe = user && entry.userId === user.uid;
+        // 判斷是否為玩家本人 (支援雲端與單機兩種模式)
+        const isMe = (user && entry.userId === user.uid) || (!isFirebaseEnabled && entry.userId === 'local-user');
         let rankClass = "";
         if (idx === 0) rankClass = "text-yellow-400 text-xl";
         else if (idx === 1) rankClass = "text-gray-400 text-lg";
